@@ -26,7 +26,7 @@
     path: "{{ ansible_env.HOME }}/.kube"
     state: directory
     mode: '0755'
-  become: no
+  become: yes
 
 - name: Copy admin.conf to user's .kube directory
   copy:
@@ -36,7 +36,7 @@
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: '0644'
-  become: no
+  become: yes
 
 # Install Calico network plugin
 - name: Install Calico Operator
