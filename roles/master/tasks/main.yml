@@ -1,0 +1,174 @@
+---
+# Initialize Kubernetes master node
+- name: Initialize Kubernetes cluster
+  shell: >
+    kubeadm init 
+    --apiserver-advertise-address={{ ansible_host }} 
+    --cri-socket unix:///var/run/cri-dockerd.sock 
+    --pod-network-cidr=192.168.0.0/16
+  register: kubeadm_init
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+# Save join command for workers
+- name: Get join command
+  shell: kubeadm token create --print-join-command
+  register: join_command
+  changed_when: false
+
+- name: Set join command as a fact
+  set_fact:
+    join_command: "{{ join_command.stdout }} --cri-socket unix:///var/run/cri-dockerd.sock"
+
+# Configure kubectl for the current user
+- name: Create .kube directory for current user
+  file:
+    path: "{{ ansible_env.HOME }}/.kube"
+    state: directory
+    mode: '0755'
+  become: no
+
+- name: Copy admin.conf to user's .kube directory
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ ansible_env.HOME }}/.kube/config"
+    remote_src: yes
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  become: no
+
+# Install Calico network plugin
+- name: Install Calico Operator
+  shell: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/tigera-operator.yaml
+  register: calico_operator
+  changed_when: calico_operator.rc == 0
+  failed_when: calico_operator.rc != 0 and "already exists" not in calico_operator.stderr
+  become: no
+
+- name: Download Calico custom resources template
+  get_url:
+    url: https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/custom-resources.yaml
+    dest: /tmp/custom-resources.yaml
+    mode: '0644'
+  become: no
+
+- name: Apply Calico custom resources
+  shell: kubectl create -f /tmp/custom-resources.yaml
+  register: calico_resources
+  changed_when: calico_resources.rc == 0
+  failed_when: calico_resources.rc != 0 and "already exists" not in calico_resources.stderr
+  become: no
+
+# Install Metrics Server
+- name: Create temporary directory for metrics server
+  file:
+    path: /tmp/k8s-metrics
+    state: directory
+    mode: '0755'
+  become: no
+
+- name: Download metrics server manifest
+  get_url:
+    url: https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+    dest: /tmp/k8s-metrics/metrics-server.yaml
+    mode: '0644'
+  become: no
+
+- name: Modify metrics server manifest to add --kubelet-insecure-tls
+  replace:
+    path: /tmp/k8s-metrics/metrics-server.yaml
+    regexp: '(.*- args:\n.*- --secure-port=4443\n)'
+    replace: '\1        - --kubelet-insecure-tls\n'
+  become: no
+
+- name: Apply metrics server manifest
+  shell: kubectl apply -f /tmp/k8s-metrics/metrics-server.yaml
+  register: metrics_server
+  changed_when: metrics_server.rc == 0
+  become: no
+
+# Install Kubernetes Dashboard
+- name: Install Helm
+  shell: |
+    curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    chmod +x get_helm.sh
+    ./get_helm.sh
+  args:
+    creates: /usr/local/bin/helm
+
+- name: Add Kubernetes Dashboard Helm repository
+  shell: helm repo add kubernetes-dashboard https://kubernetes.github.io/dashboard/
+  become: no
+  changed_when: false
+
+- name: Update Helm repositories
+  shell: helm repo update
+  become: no
+  changed_when: false
+
+- name: Install Kubernetes Dashboard
+  shell: helm upgrade --install kubernetes-dashboard kubernetes-dashboard/kubernetes-dashboard --create-namespace --namespace kubernetes-dashboard
+  become: no
+  changed_when: false
+  
+- name: Wait for Dashboard pods to be ready
+  shell: kubectl wait --for=condition=Ready pods --all -n kubernetes-dashboard --timeout=180s
+  become: no
+  changed_when: false
+  
+- name: Expose Dashboard with NodePort
+  shell: kubectl expose deployment kubernetes-dashboard-kong --name k8s-dash-svc --type NodePort --port 443 --target-port 8443 -n kubernetes-dashboard
+  become: no
+  register: expose_dashboard
+  changed_when: expose_dashboard.rc == 0
+  failed_when: expose_dashboard.rc != 0 and "already exists" not in expose_dashboard.stderr
+
+- name: Create dashboard admin service account
+  copy:
+    dest: /tmp/dashboard-admin.yaml
+    content: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: admin-user
+        namespace: kube-system
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: admin-user
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cluster-admin
+      subjects:
+      - kind: ServiceAccount
+        name: admin-user
+        namespace: kube-system
+    mode: '0644'
+
+- name: Apply dashboard admin service account
+  shell: kubectl apply -f /tmp/dashboard-admin.yaml
+  become: no
+  changed_when: false
+
+- name: Generate dashboard access token
+  shell: kubectl create token admin-user -n kube-system
+  register: dashboard_token
+  become: no
+  changed_when: false
+
+- name: Show dashboard access token
+  debug:
+    msg: "{{ dashboard_token.stdout }}"
+
+- name: Get dashboard NodePort
+  shell: kubectl get svc k8s-dash-svc -n kubernetes-dashboard -o jsonpath='{.spec.ports[0].nodePort}'
+  register: dashboard_port
+  become: no
+  changed_when: false
+
+- name: Show dashboard access URL
+  debug:
+    msg: "Access the dashboard at https://{{ ansible_host }}:{{ dashboard_port.stdout }}/"

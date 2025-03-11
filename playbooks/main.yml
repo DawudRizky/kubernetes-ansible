@@ -1,0 +1,9 @@
+---
+- name: Apply common configuration to all nodes
+  import_playbook: common.yml
+
+- name: Configure Kubernetes master node
+  import_playbook: master.yml
+
+- name: Configure Kubernetes worker nodes
+  import_playbook: workers.yml
