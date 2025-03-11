@@ -45,7 +45,7 @@
   register: calico_operator
   changed_when: calico_operator.rc == 0
   failed_when: calico_operator.rc != 0 and "already exists" not in calico_operator.stderr
-  become: no
+  become: yes
 
 
 - name: Download Calico custom resources template
