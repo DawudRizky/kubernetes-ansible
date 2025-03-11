@@ -2,5 +2,5 @@
 - hosts: k8s_cluster
   become: yes
   roles:
-    - common
     - docker
+    - common
