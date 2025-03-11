@@ -40,11 +40,13 @@
 
 # Install Calico network plugin
 - name: Install Calico Operator
-  shell: kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/tigera-operator.yaml
+  shell: >
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/tigera-operator.yaml --validate=false
   register: calico_operator
   changed_when: calico_operator.rc == 0
   failed_when: calico_operator.rc != 0 and "already exists" not in calico_operator.stderr
   become: no
+
 
 - name: Download Calico custom resources template
   get_url:
